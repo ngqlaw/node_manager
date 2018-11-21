@@ -1,0 +1,30 @@
+{application, node_manager, [
+    {description, "Node manager"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, { node_manager_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        lager
+    ]},
+    {env,[
+        % 需要连接的服务节点配置
+        {nodes, [
+            % {'base', 'base@127.0.0.1', 'cookie'}
+        ]},
+        % 额外的服务节点进程处理(gen_event)
+        {server_ext_handle, [
+            mod_node
+        ]},
+        % 额外的客户节点进程处理(gen_event)
+        {client_ext_handle, [
+            mod_node
+        ]}    
+    ]},
+    {modules, []},
+
+    {maintainers, []},
+    {licenses, []},
+    {links, []}
+]}.

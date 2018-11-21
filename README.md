@@ -1,2 +1,9 @@
-# node_manager
-for node connect
+node_manager
+=====
+
+An OTP application
+
+Build
+-----
+
+    $ rebar3 compile

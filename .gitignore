@@ -1,10 +1,16 @@
+.rebar3
+_*
 .eunit
 deps
 *.o
 *.beam
 *.plt
-erl_crash.dump
+*.swp
+*.swo
+*.dump
 ebin/*.beam
 rel/example_project
 .concrete/DEV_MODE
 .rebar
+.erlang.cookie
+log
