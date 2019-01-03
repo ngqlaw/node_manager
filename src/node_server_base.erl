@@ -10,10 +10,14 @@
 
 -behaviour(gen_event).
 
+-include("node_manager.hrl").
+
 %% API
 -export([
     start_link/0,
-    add_handler/2
+    add_handler/2,
+    start_handler/0,
+    check/0
 ]).
 
 %% gen_event callbacks
@@ -26,8 +30,6 @@
     code_change/3
 ]).
 
--define(SERVER, ?MODULE).
-
 -record(state, {
     connect_nodes = []     %% 连接中的节点
 }).
@@ -37,11 +39,33 @@
 %%%===================================================================
 %% @doc Creates an event manager
 start_link() ->
-    gen_event:start_link({local, ?SERVER}).
+    gen_event:start_link({local, ?NODE_SERVER}).
 
 %% @doc Adds an event handler
 add_handler(Handler, Args) ->
-    gen_event:add_handler(?SERVER, Handler, Args).
+    gen_event:add_handler(?NODE_SERVER, Handler, Args).
+
+%% @doc 初始化服务节点
+start_handler() ->
+    ServerMonitorRef = erlang:monitor(process, ?NODE_SERVER),
+    Done = gen_event:which_handlers(?NODE_SERVER),
+    {ok, ServerHandlers} = application:get_env(?NODE_APP, server_ext_handle),
+    Handles = [
+        begin
+            ok = add_handler(SHandler, []),
+            SHandler
+        end || SHandler <- ServerHandlers ++ [?MODULE], not lists:member(SHandler, Done)
+    ],
+    {ServerMonitorRef, Handles}.
+
+%% @doc 检查服务节点是否启动
+check() ->
+    case erlang:whereis(?NODE_SERVER) of
+        Pid when erlang:is_pid(Pid) ->
+            erlang:is_process_alive(Pid);
+        _ ->
+            false
+    end.
 
 %%%===================================================================
 %%% gen_event callbacks
@@ -61,7 +85,12 @@ add_handler(Handler, Args) ->
     {error, Reason :: term()}).
 init([]) ->
     erlang:process_flag(priority, high),
-    ok = net_kernel:monitor_nodes(true, [{node_type, hidden}, nodedown_reason]),
+    Type = case application:get_env(?NODE_APP, client_type, all) of
+        visible -> visible;
+        hidden -> hidden;
+        _ -> all
+    end,
+    ok = net_kernel:monitor_nodes(true, [{node_type, Type}, nodedown_reason]),
     {ok, #state{
         connect_nodes = []
     }}.
@@ -85,14 +114,25 @@ handle_event(Event, State) ->
     case catch do_handle_event(Event, State) of
         {ok, NewState} ->
             {ok, NewState};
-        _Error ->
+        Error ->
+            lager:error("Server handle [~p] fail:~p", [Event, Error]),
             {ok, State}
     end.
 
-do_handle_event({gather, ParentPid, Ref, _Message}, #state{
+do_handle_event({action_server, Node, Msg}, #state{
     connect_nodes = Connects
 } = State) ->
-    ParentPid ! {Ref, ?MODULE, Connects},
+    case Node == all of
+        true ->
+            rpc:abcast(Connects, ?NODE_CLIENT, Msg);
+        false ->
+            case lists:member(Node, Connects) of
+                true ->
+                    rpc:abcast([Node], ?NODE_CLIENT, Msg);
+                false ->
+                    skip
+            end
+    end,
     {ok, State};
 do_handle_event(_Event, #state{} = State) ->
     {ok, State}.
@@ -116,14 +156,34 @@ handle_call(Request, State) ->
     case catch do_handle_call(Request, State) of
         {ok, Reply, NewState} ->
             {ok, Reply, NewState};
-        _Error ->
-            {ok, ok, State}
+        Error ->
+            {ok, {error, Error}, State}
     end.
 
-do_handle_call('get_info', #state{
+do_handle_call({call_server, Node, Msg}, #state{
     connect_nodes = Connects
 } = State) ->
-    {ok, Connects, State}.
+    Reply = case Node == all of
+        true ->
+            rpc:multi_server_call(Connects, ?NODE_CLIENT, Msg);
+        false ->
+            case lists:member(Node, Connects) of
+                true ->
+                    rpc:multi_server_call([Node], ?NODE_CLIENT, Msg);
+                false ->
+                    {[], []}
+            end
+    end,
+    {ok, Reply, State};
+do_handle_call(get_info, #state{
+    connect_nodes = Connects
+} = State) ->
+    {ok, Connects, State};
+do_handle_call({From, Msg}, State) ->
+    Handlers = gen_event:which_handlers(?NODE_SERVER),
+    Replys = [gen_event:call(?NODE_SERVER, Handler, Msg) || Handler <- Handlers],
+    From ! {?NODE_SERVER, node(), Replys},
+    {ok, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -143,9 +203,9 @@ do_handle_call('get_info', #state{
 handle_info({nodeup, Node, _InfoList}, #state{
     connect_nodes = Connects
 } = State) ->
-    case rpc:call(Node, node_manager, check_client, [node()]) of
+    case rpc:call(Node, node_client_base, check, [node()]) of
         true ->
-            gen_event:notify(?SERVER, {nodeup, Node}),
+            gen_event:notify(?NODE_SERVER, {client_connect, Node}),
             {ok, State#state{
                 connect_nodes = [Node|Connects]
             }};
@@ -157,7 +217,7 @@ handle_info({nodedown, Node, _InfoList}, #state{
 } = State) ->
     case lists:member(Node, Connects) of
         true ->
-            gen_event:notify(?SERVER, {nodedown, Node}),
+            gen_event:notify(?NODE_SERVER, {client_nodedown, Node}),
             {ok, State#state{
                 connect_nodes = lists:delete(Node, Connects)
             }};
@@ -178,8 +238,8 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(terminate(Args :: (term() | {stop, Reason :: term()} | stop |
-remove_handler | {error, {'EXIT', Reason :: term()}} |
-{error, term()}), State :: term()) -> term()).
+    remove_handler | {error, {'EXIT', Reason :: term()}} |
+    {error, term()}), State :: term()) -> term()).
 terminate(_Arg, _State) ->
     ok.
 

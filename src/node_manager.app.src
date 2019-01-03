@@ -1,6 +1,6 @@
 {application, node_manager, [
     {description, "Node manager"},
-    {vsn, "0.1.0"},
+    {vsn, "0.2.0"},
     {registered, []},
     {mod, { node_manager_app, []}},
     {applications, [
@@ -13,6 +13,8 @@
         {nodes, [
             % {'base', 'base@127.0.0.1', 'cookie'}
         ]},
+        % 服务的客户节点类型(默认为全类型)
+        {client_type, all},
         % 额外的服务节点进程处理(gen_event)
         {server_ext_handle, [
             mod_node

@@ -15,7 +15,13 @@
 %%====================================================================
 
 start(_StartType, _StartArgs) ->
-    node_manager_sup:start_link().
+    case node_manager_sup:start_link() of
+        {ok, Pid} ->
+            node_manager:start(),
+            {ok, Pid};
+        Res ->
+            Res
+    end.
 
 %%--------------------------------------------------------------------
 stop(_State) ->

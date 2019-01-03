@@ -10,10 +10,14 @@
 
 -behaviour(gen_event).
 
+-include("node_manager.hrl").
+
 %% API
 -export([
     start_link/0,
-    add_handler/2
+    add_handler/2,
+    start_handler/0,
+    check/1
 ]).
 
 %% gen_event callbacks
@@ -26,19 +30,10 @@
     code_change/3
 ]).
 
--define(SERVER, ?MODULE).
--define(APP, node_manager).
-
 -record(state, {
-    connect_nodes = []     %% 连接中的节点
-    ,reconnect_nodes = []   %% 需要重连的节点
-    ,reconnect_ref          %% 重连定时器
-}).
-
--record(node, {
-    node
-    ,type
-    ,cookie
+    connect_nodes = [],     % 连接中的节点
+    reconnect_nodes = [],   % 需要重连的节点
+    reconnect_ref           % 重连定时器
 }).
 
 %%%===================================================================
@@ -46,11 +41,34 @@
 %%%===================================================================
 %% @doc Creates an event manager
 start_link() ->
-    gen_event:start_link({local, ?SERVER}).
+    gen_event:start_link({local, ?NODE_CLIENT}).
 
 %% @doc Adds an event handler
 add_handler(Handler, Args) ->
-    gen_event:add_handler(?SERVER, Handler, Args).
+    gen_event:add_handler(?NODE_CLIENT, Handler, Args).
+
+%% @doc 初始化客户节点
+start_handler() ->
+    ClientMonitorRef = erlang:monitor(process, ?NODE_CLIENT),
+    Done = gen_event:which_handlers(?NODE_CLIENT),
+    {ok, ClientHandlers} = application:get_env(?NODE_APP, client_ext_handle),
+    Handles = [
+        begin
+            ok = add_handler(CHandler, []),
+            CHandler
+        end || CHandler <- ClientHandlers ++ [?MODULE], not lists:member(CHandler, Done)
+    ],
+    {ClientMonitorRef, Handles}.
+
+%% @doc 检查客户节点是否启动
+check(Node) ->
+    case catch gen_event:call(?NODE_CLIENT, ?MODULE, {server_connect, Node}) of
+        Boolean when is_boolean(Boolean) ->
+            Boolean;
+        Error ->
+            lager:error("Connect client fail:~p", [Error]),
+            false
+    end.
 
 %%%===================================================================
 %%% gen_event callbacks
@@ -70,7 +88,7 @@ add_handler(Handler, Args) ->
     {error, Reason :: term()}).
 init([]) ->
     erlang:process_flag(priority, high),
-    {ok, Nodes} = application:get_env(?APP, nodes),
+    {ok, Nodes} = application:get_env(?NODE_APP, nodes),
     State = do_init(Nodes, [], []),
     {ok, State}.
 
@@ -93,15 +111,25 @@ handle_event(Event, State) ->
     case catch do_handle_event(Event, State) of
         {ok, NewState} ->
             {ok, NewState};
-        _Error ->
+        Error ->
+            lager:error("Client handle [~p] fail:~p", [Event, Error]),
             {ok, State}
     end.
 
-do_handle_event({gather, ParentPid, Ref, _Message}, #state{
+do_handle_event({action_client, Type, Msg}, #state{
     connect_nodes = Connects
 } = State) ->
-    L = [{Type, Node} || #node{node = Node, type = Type} <- Connects],
-    ParentPid ! {Ref, ?MODULE, L},
+    case Type == all of
+        true ->
+            rpc:abcast([Node || #node{node = Node} <- Connects], ?NODE_SERVER, Msg);
+        false ->
+            case lists:keyfind(Type, #node.type, Connects) of
+                #node{node = Node} ->
+                    rpc:abcast([Node], ?NODE_SERVER, Msg);
+                _ ->
+                    skip
+            end
+    end,
     {ok, State};
 do_handle_event({connect, Type, Node, Cookie}, #state{
     connect_nodes = Connects
@@ -189,26 +217,46 @@ handle_call(Request, State) ->
     case catch do_handle_call(Request, State) of
         {ok, Reply, NewState} ->
             {ok, Reply, NewState};
-        _Error ->
-            {ok, ok, State}
+        Error ->
+            {ok, {error, Error}, State}
     end.
 
-do_handle_call({'node_up', Node}, #state{
+do_handle_call({call_client, Type, Msg}, #state{
     connect_nodes = Connects
 } = State) ->
-    Reply =
-        case lists:keyfind(Node, #node.node, Connects) of
-            #node{type = Type} ->
-                gen_event:notify(node_client_base, {'node_up', Type});
-            false ->
-                skip
-        end,
+    Reply = case Type == all of
+        true ->
+            rpc:multi_server_call([Node || #node{node = Node} <- Connects], ?NODE_SERVER, Msg);
+        false ->
+            case lists:keyfind(Type, #node.type, Connects) of
+                #node{node = Node} ->
+                    rpc:multi_server_call([Node], ?NODE_SERVER, Msg);
+                false ->
+                    {[], []}
+            end
+    end,
     {ok, Reply, State};
-do_handle_call('get_info', #state{
+do_handle_call({server_connect, Node}, #state{
+    connect_nodes = Connects
+} = State) ->
+    Reply = case lists:keyfind(Node, #node.node, Connects) of
+        #node{type = Type} ->
+            gen_event:notify(?NODE_CLIENT, {server_connect, Type}),
+            true;
+        false ->
+            false
+    end,
+    {ok, Reply, State};
+do_handle_call(get_info, #state{
     connect_nodes = Connects
 } = State) ->
     L = [Type || #node{type = Type} <- Connects],
-    {ok, L, State}.
+    {ok, L, State};
+do_handle_call({From, Msg}, State) ->
+    Handlers = gen_event:which_handlers(?NODE_CLIENT),
+    Replys = [gen_event:call(?NODE_CLIENT, Handler, Msg) || Handler <- Handlers],
+    From ! {?NODE_CLIENT, node(), Replys},
+    {ok, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -234,7 +282,7 @@ handle_info({nodedown, Node}, #state{
         {value, Record, NewConnects} ->
             NewTimer = set_timer(OldTimer),
             NewReConnects = [Record|ReConnects],
-            gen_event:notify(?SERVER, {nodedown, Record#node.type, Node}),
+            gen_event:notify(?NODE_CLIENT, {server_nodedown, Record#node.type, Node}),
             {ok, State#state{
                 connect_nodes = NewConnects
                 ,reconnect_nodes = NewReConnects
@@ -275,8 +323,8 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(terminate(Args :: (term() | {stop, Reason :: term()} | stop |
-remove_handler | {error, {'EXIT', Reason :: term()}} |
-{error, term()}), State :: term()) -> term()).
+    remove_handler | {error, {'EXIT', Reason :: term()}} |
+    {error, term()}), State :: term()) -> term()).
 terminate(_Arg, _State) ->
     ok.
 
@@ -331,7 +379,7 @@ do_connect(#node{
     ,cookie = Cookie
 }) ->
     erlang:set_cookie(Node, Cookie),
-    case rpc:call(Node, node_manager, check_server, []) of
+    case rpc:call(Node, node_server_base, check, []) of
         true ->
             erlang:monitor_node(Node, true);
         _ ->
