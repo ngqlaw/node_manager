@@ -124,11 +124,11 @@ do_handle_event({action_server, Node, Msg}, #state{
 } = State) ->
     case Node == all of
         true ->
-            rpc:abcast(Connects, ?NODE_SERVER, {client, Msg});
+            rpc:abcast(Connects, ?NODE_SERVER, {server, Msg});
         false ->
             case lists:member(Node, Connects) of
                 true ->
-                    rpc:abcast([Node], ?NODE_SERVER, {client, Msg});
+                    rpc:abcast([Node], ?NODE_SERVER, {server, Msg});
                 false ->
                     skip
             end
@@ -165,11 +165,11 @@ do_handle_call({call_server, Node, Msg}, #state{
 } = State) ->
     Reply = case Node == all of
         true ->
-            rpc:multi_server_call(Connects, ?NODE_SERVER, {client, Msg});
+            rpc:multi_server_call(Connects, ?NODE_CLIENT, {server, Msg});
         false ->
             case lists:member(Node, Connects) of
                 true ->
-                    rpc:multi_server_call([Node], ?NODE_SERVER, {client, Msg});
+                    rpc:multi_server_call([Node], ?NODE_CLIENT, {server, Msg});
                 false ->
                     {[], []}
             end
@@ -219,9 +219,6 @@ handle_info({nodedown, Node, _InfoList}, #state{
         false ->
             {ok, State}
     end;
-handle_info({client, Msg}, State) ->
-    gen_event:notify(?NODE_CLIENT, Msg),
-    {ok, State};
 handle_info({From, {client, Msg}}, State) ->
     Handlers = gen_event:which_handlers(?NODE_CLIENT),
     Replys = [gen_event:call(?NODE_CLIENT, Handler, Msg) || Handler <- Handlers],
