@@ -226,11 +226,11 @@ do_handle_call({call_client, Type, Msg}, #state{
 } = State) ->
     Reply = case Type == all of
         true ->
-            rpc:multi_server_call([Node || #node{node = Node} <- Connects], ?NODE_SERVER, {client, Msg});
+            rpc:multi_server_call([Node || #node{node = Node} <- Connects], ?NODE_CLIENT, {client, Msg});
         false ->
             case lists:keyfind(Type, #node.type, Connects) of
                 #node{node = Node} ->
-                    rpc:multi_server_call([Node], ?NODE_SERVER, {client, Msg});
+                    rpc:multi_server_call([Node], ?NODE_CLIENT, {client, Msg});
                 false ->
                     {[], []}
             end
@@ -304,7 +304,10 @@ handle_info(reconnect, #state{
         ,reconnect_nodes = NewReConnects
         ,reconnect_ref = NewTimer
     }};
-handle_info({From, {server, Msg}}, State) ->
+handle_info({client, Msg}, State) ->
+    gen_event:notify(?NODE_SERVER, Msg),
+    {ok, State};
+handle_info({From, {client, Msg}}, State) ->
     Handlers = gen_event:which_handlers(?NODE_SERVER),
     Replys = [gen_event:call(?NODE_SERVER, Handler, Msg) || Handler <- Handlers],
     From ! {?NODE_SERVER, node(), Replys},
