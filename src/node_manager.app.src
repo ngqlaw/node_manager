@@ -16,13 +16,9 @@
         % 服务的客户节点类型(默认为全类型)
         {client_type, all},
         % 额外的服务节点进程处理(gen_event)
-        {server_ext_handle, [
-            mod_node
-        ]},
+        {server_ext_handle, []},
         % 额外的客户节点进程处理(gen_event)
-        {client_ext_handle, [
-            mod_node
-        ]}    
+        {client_ext_handle, []}    
     ]},
     {modules, []},
 

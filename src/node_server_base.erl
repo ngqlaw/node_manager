@@ -124,11 +124,11 @@ do_handle_event({action_server, Node, Msg}, #state{
 } = State) ->
     case Node == all of
         true ->
-            rpc:abcast(Connects, ?NODE_CLIENT, Msg);
+            rpc:abcast(Connects, ?NODE_SERVER, {client, Msg});
         false ->
             case lists:member(Node, Connects) of
                 true ->
-                    rpc:abcast([Node], ?NODE_CLIENT, Msg);
+                    rpc:abcast([Node], ?NODE_SERVER, {client, Msg});
                 false ->
                     skip
             end
@@ -165,11 +165,11 @@ do_handle_call({call_server, Node, Msg}, #state{
 } = State) ->
     Reply = case Node == all of
         true ->
-            rpc:multi_server_call(Connects, ?NODE_CLIENT, Msg);
+            rpc:multi_server_call(Connects, ?NODE_SERVER, {client, Msg});
         false ->
             case lists:member(Node, Connects) of
                 true ->
-                    rpc:multi_server_call([Node], ?NODE_CLIENT, Msg);
+                    rpc:multi_server_call([Node], ?NODE_SERVER, {client, Msg});
                 false ->
                     {[], []}
             end
@@ -178,12 +178,7 @@ do_handle_call({call_server, Node, Msg}, #state{
 do_handle_call(get_info, #state{
     connect_nodes = Connects
 } = State) ->
-    {ok, Connects, State};
-do_handle_call({From, Msg}, State) ->
-    Handlers = gen_event:which_handlers(?NODE_SERVER),
-    Replys = [gen_event:call(?NODE_SERVER, Handler, Msg) || Handler <- Handlers],
-    From ! {?NODE_SERVER, node(), Replys},
-    {ok, State}.
+    {ok, Connects, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -224,6 +219,14 @@ handle_info({nodedown, Node, _InfoList}, #state{
         false ->
             {ok, State}
     end;
+handle_info({client, Msg}, State) ->
+    gen_event:notify(?NODE_CLIENT, Msg),
+    {ok, State};
+handle_info({From, {client, Msg}}, State) ->
+    Handlers = gen_event:which_handlers(?NODE_CLIENT),
+    Replys = [gen_event:call(?NODE_CLIENT, Handler, Msg) || Handler <- Handlers],
+    From ! {?NODE_CLIENT, node(), Replys},
+    {ok, State};
 handle_info(_Info, State) ->
     {ok, State}.
 

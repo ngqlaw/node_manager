@@ -121,11 +121,11 @@ do_handle_event({action_client, Type, Msg}, #state{
 } = State) ->
     case Type == all of
         true ->
-            rpc:abcast([Node || #node{node = Node} <- Connects], ?NODE_SERVER, Msg);
+            rpc:abcast([Node || #node{node = Node} <- Connects], ?NODE_CLIENT, {server, Msg});
         false ->
             case lists:keyfind(Type, #node.type, Connects) of
                 #node{node = Node} ->
-                    rpc:abcast([Node], ?NODE_SERVER, Msg);
+                    rpc:abcast([Node], ?NODE_CLIENT, {server, Msg});
                 _ ->
                     skip
             end
@@ -226,11 +226,11 @@ do_handle_call({call_client, Type, Msg}, #state{
 } = State) ->
     Reply = case Type == all of
         true ->
-            rpc:multi_server_call([Node || #node{node = Node} <- Connects], ?NODE_SERVER, Msg);
+            rpc:multi_server_call([Node || #node{node = Node} <- Connects], ?NODE_CLIENT, {server, Msg});
         false ->
             case lists:keyfind(Type, #node.type, Connects) of
                 #node{node = Node} ->
-                    rpc:multi_server_call([Node], ?NODE_SERVER, Msg);
+                    rpc:multi_server_call([Node], ?NODE_CLIENT, {server, Msg});
                 false ->
                     {[], []}
             end
@@ -251,12 +251,7 @@ do_handle_call(get_info, #state{
     connect_nodes = Connects
 } = State) ->
     L = [Type || #node{type = Type} <- Connects],
-    {ok, L, State};
-do_handle_call({From, Msg}, State) ->
-    Handlers = gen_event:which_handlers(?NODE_CLIENT),
-    Replys = [gen_event:call(?NODE_CLIENT, Handler, Msg) || Handler <- Handlers],
-    From ! {?NODE_CLIENT, node(), Replys},
-    {ok, State}.
+    {ok, L, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -309,6 +304,14 @@ handle_info(reconnect, #state{
         ,reconnect_nodes = NewReConnects
         ,reconnect_ref = NewTimer
     }};
+handle_info({server, Msg}, State) ->
+    gen_event:notify(?NODE_SERVER, Msg),
+    {ok, State};
+handle_info({From, {server, Msg}}, State) ->
+    Handlers = gen_event:which_handlers(?NODE_SERVER),
+    Replys = [gen_event:call(?NODE_SERVER, Handler, Msg) || Handler <- Handlers],
+    From ! {?NODE_SERVER, node(), Replys},
+    {ok, State};
 handle_info(_Info, State) ->
     {ok, State}.
 
