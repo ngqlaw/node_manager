@@ -13,4 +13,5 @@ rel/example_project
 .concrete/DEV_MODE
 .rebar
 .erlang.cookie
+.lock
 log

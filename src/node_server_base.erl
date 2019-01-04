@@ -223,7 +223,7 @@ handle_info({server, Msg}, State) ->
     gen_event:notify(?NODE_CLIENT, Msg),
     {ok, State};
 handle_info({From, {server, Msg}}, State) ->
-    Handlers = gen_event:which_handlers(?NODE_CLIENT),
+    Handlers = lists:delete(node_client_base, gen_event:which_handlers(?NODE_CLIENT)),
     Replys = [gen_event:call(?NODE_CLIENT, Handler, Msg) || Handler <- Handlers],
     From ! {?NODE_CLIENT, node(), Replys},
     {ok, State};

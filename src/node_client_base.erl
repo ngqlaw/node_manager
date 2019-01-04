@@ -308,7 +308,7 @@ handle_info({client, Msg}, State) ->
     gen_event:notify(?NODE_SERVER, Msg),
     {ok, State};
 handle_info({From, {client, Msg}}, State) ->
-    Handlers = gen_event:which_handlers(?NODE_SERVER),
+    Handlers = lists:delete(node_server_base, gen_event:which_handlers(?NODE_SERVER)),
     Replys = [gen_event:call(?NODE_SERVER, Handler, Msg) || Handler <- Handlers],
     From ! {?NODE_SERVER, node(), Replys},
     {ok, State};
