@@ -39,31 +39,31 @@ handle_event(Event, State) ->
 
 %% 客户节点连接信号
 do_handle_event({client_connect, Node}, #state{} = State) ->
-    lager:debug("Client Node connect:~p", [Node]),
+    mod_node_client:event({client_connect, Node}),
     {ok, State};
 %% 客户节点断开信号
 do_handle_event({client_nodedown, Node}, #state{} = State) ->
-    lager:debug("Client Node down:~p", [Node]),
+    mod_node_client:event({client_nodedown, Node}),
     {ok, State};
 %% 服务节点连接信号
 do_handle_event({server_connect, Type}, #state{} = State) ->
-    lager:debug("Server connect:~p", [Type]),
+    mod_node_server:event({server_connect, Type}),
     {ok, State};
 %% 服务节点断开信号
 do_handle_event({server_nodedown, Type, Node}, #state{} = State) ->
-    lager:debug("Server down:~p ~p", [Type, Node]),
+    mod_node_server:event({server_nodedown, Type, Node}),
     {ok, State};
-do_handle_event(Event, #state{} = State) ->
-    lager:debug("Unknow event:~p", [Event]),
+do_handle_event(_Event, #state{} = State) ->
+    % lager:debug("Unknow event:~p", [Event]),
     {ok, State}.
 
-handle_call(Request, State) ->
-    lager:debug("Call event:~p", [Request]),
+handle_call(_Request, State) ->
+    % lager:debug("Call event:~p", [Request]),
     Reply = ok,
     {ok, Reply, State}.
 
-handle_info(Info, State) ->
-    lager:debug("Info event:~p", [Info]),
+handle_info(_Info, State) ->
+    % lager:debug("Info event:~p", [Info]),
     {ok, State}.
 
 terminate(_Arg, _State) ->

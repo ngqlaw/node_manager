@@ -43,7 +43,11 @@
     server,
     server_handlers = [],
     client,
-    client_handlers = []
+    client_handlers = [],
+    server_api,
+    server_api_handlers = [],
+    client_api,
+    client_api_handlers = []
 }).
 
 %%%===================================================================
@@ -155,11 +159,17 @@ handle_call(_Request, _From, State) ->
 handle_cast(init, #state{} = State) ->
     {ClientMonitorRef, ClientHandlers} = node_client_base:start_handler(),
     {ServerMonitorRef, ServerHandlers} = node_server_base:start_handler(),
+    {ClientAPIMonitorRef, ClientAPIHandlers} = mod_node_client:start_handler(),
+    {ServerAPIMonitorRef, ServerAPIHandlers} = mod_node_server:start_handler(),
     {noreply, State#state{
         client = ClientMonitorRef,
         client_handlers = ClientHandlers,
         server = ServerMonitorRef,
-        server_handlers = ServerHandlers
+        server_handlers = ServerHandlers,
+        server_api = ServerAPIMonitorRef,
+        server_api_handlers = ServerAPIHandlers,
+        client_api = ClientAPIMonitorRef,
+        client_api_handlers = ClientAPIHandlers
     }};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -184,12 +194,24 @@ handle_info({'DOWN', MonitorRef, process, _Object, _Info}, #state{client = Monit
 handle_info({'DOWN', MonitorRef, process, _Object, _Info}, #state{server = MonitorRef} = State) ->
     erlang:send_after(1000, self(), re_moiter_server),
     {noreply, State#state{server = undefined, server_handlers = []}};
+handle_info({'DOWN', MonitorRef, process, _Object, _Info}, #state{client_api = MonitorRef} = State) ->
+    erlang:send_after(1000, self(), re_moiter_client_api),
+    {noreply, State#state{client = undefined, client_handlers = []}};
+handle_info({'DOWN', MonitorRef, process, _Object, _Info}, #state{server_api = MonitorRef} = State) ->
+    erlang:send_after(1000, self(), re_moiter_server_api),
+    {noreply, State#state{server = undefined, server_handlers = []}};
 handle_info(re_moiter_client, #state{} = State) ->
-    {ClientMonitorRef, ClientHandlers} = node_client_base:start_handler(),
-    {noreply, State#state{client = ClientMonitorRef, client_handlers = ClientHandlers}};
+    {MonitorRef, Handlers} = node_client_base:start_handler(),
+    {noreply, State#state{client = MonitorRef, client_handlers = Handlers}};
 handle_info(re_moiter_server, #state{} = State) ->
-    {ServerMonitorRef, ServerHandlers} = node_server_base:start_handler(),
-    {noreply, State#state{server = ServerMonitorRef, server_handlers = ServerHandlers}};
+    {MonitorRef, Handlers} = node_server_base:start_handler(),
+    {noreply, State#state{server = MonitorRef, server_handlers = Handlers}};
+handle_info(re_moiter_client_api, #state{} = State) ->
+    {MonitorRef, Handlers} = mod_node_client:start_handler(),
+    {noreply, State#state{client_api = MonitorRef, client_api_handlers = Handlers}};
+handle_info(re_moiter_server_api, #state{} = State) ->
+    {MonitorRef, Handlers} = mod_node_server:start_handler(),
+    {noreply, State#state{server_api = MonitorRef, server_api_handlers = Handlers}};
 handle_info(_Info, State) ->
     {noreply, State}.
 

@@ -3,9 +3,9 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created : 19. 一月 2017 16:01
+%%% Created : 04. 一月 2019 11:53
 %%%-------------------------------------------------------------------
--module(node_server_base).
+-module(mod_node_client).
 -author("ngq").
 
 -behaviour(gen_event).
@@ -17,7 +17,8 @@
     start_link/0,
     add_handler/2,
     start_handler/0,
-    check/0
+    event/1,
+    call/1
 ]).
 
 %% gen_event callbacks
@@ -30,36 +31,42 @@
     code_change/3
 ]).
 
--record(state, {
-    connect_nodes = []     %% 连接中的节点
-}).
+-define(SERVER, ?MODULE).
+
+-record(state, {}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 %% @doc Creates an event manager
 start_link() ->
-    gen_event:start_link({local, ?NODE_SERVER}).
+    gen_event:start_link({local, ?SERVER}).
 
 %% @doc Adds an event handler
 add_handler(Handler, Args) ->
-    gen_event:add_handler(?NODE_SERVER, Handler, Args).
+    gen_event:add_handler(?SERVER, Handler, Args).
 
-%% @doc 初始化服务节点
+%% @doc 初始化客户节点
 start_handler() ->
-    MonitorRef = erlang:monitor(process, ?NODE_SERVER),
-    Handles = [?MODULE, mod_node],
-    lists:foreach(fun(Handler) -> ok = add_handler(Handler, []) end, Handles),
-    {MonitorRef, Handles}.
+    MonitorRef = erlang:monitor(process, ?SERVER),
+    Done = gen_event:which_handlers(?SERVER),
+    Handlers = application:get_env(?NODE_APP, client_ext_handle, []),
+    Handles = [
+        begin
+            ok = add_handler(Handler, []),
+            Handler
+        end || Handler <- [?MODULE | Handlers], not lists:member(Handler, Done)
+    ],
+    {MonitorRef, Done ++ Handles}.
 
-%% @doc 检查服务节点是否启动
-check() ->
-    case erlang:whereis(?NODE_SERVER) of
-        Pid when erlang:is_pid(Pid) ->
-            erlang:is_process_alive(Pid);
-        _ ->
-            false
-    end.
+%% @doc 异步事件
+event(Event) ->
+    gen_event:notify(?SERVER, Event).
+
+%% @doc 同步事件
+call(Event) ->
+    Handlers = lists:delete(mod_node, gen_event:which_handlers(?SERVER)),
+    [gen_event:call(?SERVER, Handler, Event) || Handler <- Handlers].
 
 %%%===================================================================
 %%% gen_event callbacks
@@ -78,16 +85,7 @@ check() ->
     {ok, State :: #state{}, hibernate} |
     {error, Reason :: term()}).
 init([]) ->
-    erlang:process_flag(priority, high),
-    Type = case application:get_env(?NODE_APP, client_type, all) of
-        visible -> visible;
-        hidden -> hidden;
-        _ -> all
-    end,
-    ok = net_kernel:monitor_nodes(true, [{node_type, Type}, nodedown_reason]),
-    {ok, #state{
-        connect_nodes = []
-    }}.
+    {ok, #state{}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -105,30 +103,7 @@ init([]) ->
         Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
     remove_handler).
 handle_event(Event, State) ->
-    case catch do_handle_event(Event, State) of
-        {ok, NewState} ->
-            {ok, NewState};
-        Error ->
-            lager:error("Server handle [~p] fail:~p", [Event, Error]),
-            {ok, State}
-    end.
-
-do_handle_event({action_server, Node, Msg}, #state{
-    connect_nodes = Connects
-} = State) ->
-    case Node == all of
-        true ->
-            rpc:abcast(Connects, ?NODE_SERVER, {server, Msg});
-        false ->
-            case lists:member(Node, Connects) of
-                true ->
-                    rpc:abcast([Node], ?NODE_SERVER, {server, Msg});
-                false ->
-                    skip
-            end
-    end,
-    {ok, State};
-do_handle_event(_Event, #state{} = State) ->
+    lager:debug("Client event:~p", [Event]),
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -147,32 +122,9 @@ do_handle_event(_Event, #state{} = State) ->
         Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
     {remove_handler, Reply :: term()}).
 handle_call(Request, State) ->
-    case catch do_handle_call(Request, State) of
-        {ok, Reply, NewState} ->
-            {ok, Reply, NewState};
-        Error ->
-            {ok, {error, Error}, State}
-    end.
-
-do_handle_call({call_server, Node, Msg}, #state{
-    connect_nodes = Connects
-} = State) ->
-    {Replys, BadNodes} = case Node == all of
-        true ->
-            rpc:multi_server_call(Connects, ?NODE_SERVER, {server, Msg});
-        false ->
-            case lists:member(Node, Connects) of
-                true ->
-                    rpc:multi_server_call([Node], ?NODE_SERVER, {server, Msg});
-                false ->
-                    {[], []}
-            end
-    end,
-    {ok, {lists:append(Replys), BadNodes}, State};
-do_handle_call(get_info, #state{
-    connect_nodes = Connects
-} = State) ->
-    {ok, Connects, State}.
+    lager:debug("Client call:~p", [Request]),
+    Reply = ok,
+    {ok, Reply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -189,38 +141,8 @@ do_handle_call(get_info, #state{
     {swap_handler, Args1 :: term(), NewState :: #state{},
         Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
     remove_handler).
-handle_info({nodeup, Node, _InfoList}, #state{
-    connect_nodes = Connects
-} = State) ->
-    case rpc:call(Node, node_client_base, check, [node()]) of
-        true ->
-            gen_event:notify(?NODE_SERVER, {client_connect, Node}),
-            {ok, State#state{
-                connect_nodes = [Node|Connects]
-            }};
-        _ ->
-            {ok, State}
-    end;
-handle_info({nodedown, Node, _InfoList}, #state{
-    connect_nodes = Connects
-} = State) ->
-    case lists:member(Node, Connects) of
-        true ->
-            gen_event:notify(?NODE_SERVER, {client_nodedown, Node}),
-            {ok, State#state{
-                connect_nodes = lists:delete(Node, Connects)
-            }};
-        false ->
-            {ok, State}
-    end;
-handle_info({server, Msg}, State) ->
-    mod_node_client:event(Msg),
-    {ok, State};
-handle_info({From, {server, Msg}}, State) ->
-    Replys = mod_node_client:call(Msg),
-    From ! {?NODE_SERVER, node(), Replys},
-    {ok, State};
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    lager:debug("Client info:~p", [Info]),
     {ok, State}.
 
 %%--------------------------------------------------------------------

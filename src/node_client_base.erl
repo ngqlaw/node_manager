@@ -37,7 +37,7 @@
 }).
 
 %%%===================================================================
-%%% gen_event callbacks
+%%% API
 %%%===================================================================
 %% @doc Creates an event manager
 start_link() ->
@@ -49,16 +49,10 @@ add_handler(Handler, Args) ->
 
 %% @doc 初始化客户节点
 start_handler() ->
-    ClientMonitorRef = erlang:monitor(process, ?NODE_CLIENT),
-    Done = gen_event:which_handlers(?NODE_CLIENT),
-    {ok, ClientHandlers} = application:get_env(?NODE_APP, client_ext_handle),
-    Handles = [
-        begin
-            ok = add_handler(CHandler, []),
-            CHandler
-        end || CHandler <- ClientHandlers ++ [?MODULE], not lists:member(CHandler, Done)
-    ],
-    {ClientMonitorRef, Handles}.
+    MonitorRef = erlang:monitor(process, ?NODE_CLIENT),
+    Handles = [?MODULE, mod_node],
+    lists:foreach(fun(Handler) -> ok = add_handler(Handler, []) end, Handles),
+    {MonitorRef, Handles}.
 
 %% @doc 检查客户节点是否启动
 check(Node) ->
@@ -224,7 +218,7 @@ handle_call(Request, State) ->
 do_handle_call({call_client, Type, Msg}, #state{
     connect_nodes = Connects
 } = State) ->
-    Reply = case Type == all of
+    {Replys, BadNodes} = case Type == all of
         true ->
             rpc:multi_server_call([Node || #node{node = Node} <- Connects], ?NODE_CLIENT, {client, Msg});
         false ->
@@ -235,7 +229,7 @@ do_handle_call({call_client, Type, Msg}, #state{
                     {[], []}
             end
     end,
-    {ok, Reply, State};
+    {ok, {lists:append(Replys), BadNodes}, State};
 do_handle_call({server_connect, Node}, #state{
     connect_nodes = Connects
 } = State) ->
@@ -305,12 +299,11 @@ handle_info(reconnect, #state{
         ,reconnect_ref = NewTimer
     }};
 handle_info({client, Msg}, State) ->
-    gen_event:notify(?NODE_SERVER, Msg),
+    mod_node_server:event(Msg),
     {ok, State};
 handle_info({From, {client, Msg}}, State) ->
-    Handlers = lists:delete(node_server_base, gen_event:which_handlers(?NODE_SERVER)),
-    Replys = [gen_event:call(?NODE_SERVER, Handler, Msg) || Handler <- Handlers],
-    From ! {?NODE_SERVER, node(), Replys},
+    Replys = mod_node_server:call(Msg),
+    From ! {?NODE_CLIENT, node(), Replys},
     {ok, State};
 handle_info(_Info, State) ->
     {ok, State}.
