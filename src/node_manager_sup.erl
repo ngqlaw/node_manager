@@ -31,10 +31,10 @@ start_link() ->
 init([]) ->
 	Client = ?CHILD(node_client_base),
 	Server = ?CHILD(node_server_base),
-    Client = ?CHILD(mod_node_client),
-    Server = ?CHILD(mod_node_server),
+    ClientAPI = ?CHILD(mod_node_client),
+    ServerAPI = ?CHILD(mod_node_server),
 	Mange = ?CHILD(node_manager),
-	{ok, { {one_for_one, 5, 60}, [Client, Server, Mange]} }.
+	{ok, { {one_for_one, 5, 60}, [Client, Server, ClientAPI, ServerAPI, Mange]} }.
 
 %%====================================================================
 %% Internal functions
