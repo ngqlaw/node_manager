@@ -1,30 +1,30 @@
 %%%-------------------------------------------------------------------
 %%% @author ngq <ngq_scut@126.com>
 %%% @doc
-%%%
+%%% 内部服务端处理模块
 %%% @end
 %%% Created : 19. 一月 2017 16:01
 %%%-------------------------------------------------------------------
 -module(node_server_base).
 -author("ngq").
 
--behaviour(gen_event).
+-behaviour(gen_server).
 
 -include("node_manager.hrl").
 
 %% API
 -export([
     start_link/0,
-    add_handler/2,
-    start_handler/0,
-    check/0
+    check/0,
+    remote_action/2,
+    remote_call/2
 ]).
 
-%% gen_event callbacks
+%% gen_server callbacks
 -export([
     init/1,
-    handle_event/2,
-    handle_call/2,
+    handle_cast/2,
+    handle_call/3,
     handle_info/2,
     terminate/2,
     code_change/3
@@ -39,18 +39,7 @@
 %%%===================================================================
 %% @doc Creates an event manager
 start_link() ->
-    gen_event:start_link({local, ?NODE_SERVER}).
-
-%% @doc Adds an event handler
-add_handler(Handler, Args) ->
-    gen_event:add_handler(?NODE_SERVER, Handler, Args).
-
-%% @doc 初始化服务节点
-start_handler() ->
-    MonitorRef = erlang:monitor(process, ?NODE_SERVER),
-    Handles = [?MODULE, mod_node],
-    lists:foreach(fun(Handler) -> ok = add_handler(Handler, []) end, Handles),
-    {MonitorRef, Handles}.
+    gen_server:start_link({local, ?NODE_SERVER}, ?MODULE, [], []).
 
 %% @doc 检查服务节点是否启动
 check() ->
@@ -61,22 +50,18 @@ check() ->
             false
     end.
 
+%% @doc 往客户节点发送消息（异步）
+remote_action(Node, Msg) ->
+    gen_server:cast(?NODE_CLIENT, {action_server, Node, Msg}).
+
+%% @doc 往客户节点发送消息（同步）
+remote_call(Node, Msg) ->
+    gen_server:call(?NODE_CLIENT, {call_server, Node, Msg}).
+
 %%%===================================================================
-%%% gen_event callbacks
+%%% gen_server callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever a new event handler is added to an event manager,
-%% this function is called to initialize the event handler.
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(init(InitArgs :: term()) ->
-    {ok, State :: #state{}} |
-    {ok, State :: #state{}, hibernate} |
-    {error, Reason :: term()}).
 init([]) ->
     erlang:process_flag(priority, high),
     Type = case application:get_env(?NODE_APP, client_type, all) of
@@ -89,166 +74,99 @@ init([]) ->
         connect_nodes = []
     }}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever an event manager receives an event sent using
-%% gen_event:notify/2 or gen_event:sync_notify/2, this function is
-%% called for each installed event handler to handle the event.
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(handle_event(Event :: term(), State :: #state{}) ->
-    {ok, NewState :: #state{}} |
-    {ok, NewState :: #state{}, hibernate} |
-    {swap_handler, Args1 :: term(), NewState :: #state{},
-        Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
-    remove_handler).
-handle_event(Event, State) ->
-    case catch do_handle_event(Event, State) of
+handle_cast(Event, State) ->
+    case catch do_handle_cast(Event, State) of
         {ok, NewState} ->
-            {ok, NewState};
+            {noreply, NewState};
         Error ->
-            lager:error("Server handle [~p] fail:~p", [Event, Error]),
-            {ok, State}
+            error_logger:error_msg("Server handle [~p] fail:~p", [Event, Error]),
+            {noreply, State}
     end.
 
-do_handle_event({action_server, Node, Msg}, #state{
+do_handle_cast({action_server, Node, Msg}, #state{
     connect_nodes = Connects
 } = State) ->
     case Node == all of
         true ->
-            rpc:abcast(Connects, ?NODE_SERVER, {server, Msg});
+            rpc:abcast(Connects, ?NODE_CLIENT, {server, Msg});
         false ->
             case lists:member(Node, Connects) of
                 true ->
-                    rpc:abcast([Node], ?NODE_SERVER, {server, Msg});
+                    gen_server:cast({?NODE_CLIENT, Node}, {server, Msg});
                 false ->
                     skip
             end
     end,
     {ok, State};
-do_handle_event(_Event, #state{} = State) ->
+do_handle_cast({client, Msg}, State) ->
+    mod_node_client:event(Msg),
+    {ok, State};
+do_handle_cast(_Event, #state{} = State) ->
     {ok, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever an event manager receives a request sent using
-%% gen_event:call/3,4, this function is called for the specified
-%% event handler to handle the request.
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(handle_call(Request :: term(), State :: #state{}) ->
-    {ok, Reply :: term(), NewState :: #state{}} |
-    {ok, Reply :: term(), NewState :: #state{}, hibernate} |
-    {swap_handler, Reply :: term(), Args1 :: term(), NewState :: #state{},
-        Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
-    {remove_handler, Reply :: term()}).
-handle_call(Request, State) ->
+handle_call(Request, _From, State) ->
     case catch do_handle_call(Request, State) of
         {ok, Reply, NewState} ->
-            {ok, Reply, NewState};
+            {reply, Reply, NewState};
         Error ->
-            {ok, {error, Error}, State}
+            {reply, {error, Error}, State}
     end.
 
 do_handle_call({call_server, Node, Msg}, #state{
     connect_nodes = Connects
 } = State) ->
-    {Replys, BadNodes} = case Node == all of
+    Reply = case Node == all of
         true ->
-            rpc:multi_server_call(Connects, ?NODE_SERVER, {server, Msg});
+            rpc:multi_server_call(Connects, ?NODE_CLIENT, {server, Msg});
         false ->
             case lists:member(Node, Connects) of
                 true ->
-                    rpc:multi_server_call([Node], ?NODE_SERVER, {server, Msg});
+                    gen_server:call({?NODE_CLIENT, Node}, {server, Msg});
                 false ->
-                    {[], []}
+                    {error, {not_exist, Node}}
             end
     end,
-    {ok, {lists:append(Replys), BadNodes}, State};
+    {ok, Reply, State};
 do_handle_call(get_info, #state{
     connect_nodes = Connects
 } = State) ->
-    {ok, Connects, State}.
+    {ok, Connects, State};
+do_handle_call({client, Msg}, State) ->
+    Reply = mod_node_client:call(Msg),
+    {ok, Reply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called for each installed event handler when
-%% an event manager receives any other message than an event or a
-%% synchronous request (or a system message).
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(handle_info(Info :: term(), State :: #state{}) ->
-    {ok, NewState :: #state{}} |
-    {ok, NewState :: #state{}, hibernate} |
-    {swap_handler, Args1 :: term(), NewState :: #state{},
-        Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
-    remove_handler).
 handle_info({nodeup, Node, _InfoList}, #state{
     connect_nodes = Connects
 } = State) ->
-    case rpc:call(Node, node_client_base, check, [node()]) of
+    case rpc:call(Node, ?NODE_CLIENT, check, [node()]) of
         true ->
-            gen_event:notify(?NODE_SERVER, {client_connect, Node}),
-            {ok, State#state{
+            % 通知节点连接
+            mod_node_server:node_connect(Node),
+            {noreply, State#state{
                 connect_nodes = [Node|Connects]
             }};
         _ ->
-            {ok, State}
+            {noreply, State}
     end;
 handle_info({nodedown, Node, _InfoList}, #state{
     connect_nodes = Connects
 } = State) ->
     case lists:member(Node, Connects) of
         true ->
-            gen_event:notify(?NODE_SERVER, {client_nodedown, Node}),
-            {ok, State#state{
+            % 通知节点关闭
+            mod_node_server:node_down(Node),
+            {noreply, State#state{
                 connect_nodes = lists:delete(Node, Connects)
             }};
         false ->
-            {ok, State}
+            {noreply, State}
     end;
-handle_info({server, Msg}, State) ->
-    mod_node_client:event(Msg),
-    {ok, State};
-handle_info({From, {server, Msg}}, State) ->
-    Replys = mod_node_client:call(Msg),
-    From ! {?NODE_SERVER, node(), Replys},
-    {ok, State};
 handle_info(_Info, State) ->
-    {ok, State}.
+    {noreply, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever an event handler is deleted from an event manager, this
-%% function is called. It should be the opposite of Module:init/1 and
-%% do any necessary cleaning up.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
--spec(terminate(Args :: (term() | {stop, Reason :: term()} | stop |
-    remove_handler | {error, {'EXIT', Reason :: term()}} |
-    {error, term()}), State :: term()) -> term()).
 terminate(_Arg, _State) ->
     ok.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(code_change(OldVsn :: term() | {down, term()}, State :: #state{},
-    Extra :: term()) ->
-    {ok, NewState :: #state{}}).
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 

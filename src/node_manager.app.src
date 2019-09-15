@@ -1,12 +1,11 @@
 {application, node_manager, [
     {description, "Node manager"},
-    {vsn, "0.2.0"},
+    {vsn, "0.3.0"},
     {registered, []},
     {mod, { node_manager_app, []}},
     {applications, [
         kernel,
-        stdlib,
-        lager
+        stdlib
     ]},
     {env,[
         % 需要连接的服务节点配置

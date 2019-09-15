@@ -8,10 +8,10 @@ deps
 *.swp
 *.swo
 *.dump
-*.lock
 ebin/*.beam
 rel/example_project
 .concrete/DEV_MODE
 .rebar
 .erlang.cookie
 log
+.idea

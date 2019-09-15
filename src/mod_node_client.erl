@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @author ngq <ngq_scut@126.com>
 %%% @doc
-%%%
+%%% 客户端节点处理模块
 %%% @end
 %%% Created : 04. 一月 2019 11:53
 %%%-------------------------------------------------------------------
@@ -16,9 +16,11 @@
 -export([
     start_link/0,
     add_handler/2,
-    start_handler/0,
+    start_handler/1,
     event/1,
-    call/1
+    call/1,
+    node_connect/1,
+    node_down/2
 ]).
 
 %% gen_event callbacks
@@ -47,17 +49,10 @@ add_handler(Handler, Args) ->
     gen_event:add_handler(?SERVER, Handler, Args).
 
 %% @doc 初始化客户节点
-start_handler() ->
-    MonitorRef = erlang:monitor(process, ?SERVER),
+start_handler(Handlers) ->
     Done = gen_event:which_handlers(?SERVER),
-    Handlers = application:get_env(?NODE_APP, client_ext_handle, []),
-    Handles = [
-        begin
-            ok = add_handler(Handler, []),
-            Handler
-        end || Handler <- [?MODULE | Handlers], not lists:member(Handler, Done)
-    ],
-    {MonitorRef, Done ++ Handles}.
+    Start = [?MODULE|Handlers] -- Done,
+    lists:foreach(fun(Handler) -> ok = add_handler(Handler, []) end, Start).
 
 %% @doc 异步事件
 event(Event) ->
@@ -65,112 +60,40 @@ event(Event) ->
 
 %% @doc 同步事件
 call(Event) ->
-    Handlers = lists:delete(mod_node, gen_event:which_handlers(?SERVER)),
-    [gen_event:call(?SERVER, Handler, Event) || Handler <- Handlers].
+    case gen_event:which_handlers(?SERVER) of
+        [Handler] ->
+            gen_event:call(?SERVER, Handler, Event);
+        L ->
+            [{Handler, gen_event:call(?SERVER, Handler, Event)} || Handler <- L]
+    end.
+
+%% @doc 节点连接
+node_connect(Type) ->
+    gen_event:notify(?SERVER, {server_connect, Type}).
+
+%% @doc 节点关闭
+node_down(Type, Node) ->
+    gen_event:notify(?SERVER, {server_nodedown, Type, Node}).
 
 %%%===================================================================
 %%% gen_event callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever a new event handler is added to an event manager,
-%% this function is called to initialize the event handler.
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(init(InitArgs :: term()) ->
-    {ok, State :: #state{}} |
-    {ok, State :: #state{}, hibernate} |
-    {error, Reason :: term()}).
 init([]) ->
     {ok, #state{}}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever an event manager receives an event sent using
-%% gen_event:notify/2 or gen_event:sync_notify/2, this function is
-%% called for each installed event handler to handle the event.
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(handle_event(Event :: term(), State :: #state{}) ->
-    {ok, NewState :: #state{}} |
-    {ok, NewState :: #state{}, hibernate} |
-    {swap_handler, Args1 :: term(), NewState :: #state{},
-        Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
-    remove_handler).
-handle_event(Event, State) ->
-    lager:debug("Client event:~p", [Event]),
+handle_event(_Event, State) ->
     {ok, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever an event manager receives a request sent using
-%% gen_event:call/3,4, this function is called for the specified
-%% event handler to handle the request.
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(handle_call(Request :: term(), State :: #state{}) ->
-    {ok, Reply :: term(), NewState :: #state{}} |
-    {ok, Reply :: term(), NewState :: #state{}, hibernate} |
-    {swap_handler, Reply :: term(), Args1 :: term(), NewState :: #state{},
-        Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
-    {remove_handler, Reply :: term()}).
-handle_call(Request, State) ->
-    lager:debug("Client call:~p", [Request]),
-    Reply = ok,
-    {ok, Reply, State}.
+handle_call(_Request, State) ->
+    {ok, ok, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called for each installed event handler when
-%% an event manager receives any other message than an event or a
-%% synchronous request (or a system message).
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(handle_info(Info :: term(), State :: #state{}) ->
-    {ok, NewState :: #state{}} |
-    {ok, NewState :: #state{}, hibernate} |
-    {swap_handler, Args1 :: term(), NewState :: #state{},
-        Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
-    remove_handler).
-handle_info(Info, State) ->
-    lager:debug("Client info:~p", [Info]),
+handle_info(_Info, State) ->
     {ok, State}.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Whenever an event handler is deleted from an event manager, this
-%% function is called. It should be the opposite of Module:init/1 and
-%% do any necessary cleaning up.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
--spec(terminate(Args :: (term() | {stop, Reason :: term()} | stop |
-    remove_handler | {error, {'EXIT', Reason :: term()}} |
-    {error, term()}), State :: term()) -> term()).
 terminate(_Arg, _State) ->
     ok.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @end
-%%--------------------------------------------------------------------
--spec(code_change(OldVsn :: term() | {down, term()}, State :: #state{},
-    Extra :: term()) ->
-    {ok, NewState :: #state{}}).
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
