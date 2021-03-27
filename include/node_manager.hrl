@@ -3,16 +3,20 @@
 
 -define(NODE_APP, node_manager).
 
-%% 客户端API进程
--define(NODE_CLIENT, node_client_base).
-%% 服务端API进程
--define(NODE_SERVER, node_server_base).
-
 %% 节点信息
 -record(node, {
     node,       % 节点
-    type,       % 别称
     cookie      % 节点cookie
 }).
+
+-ifndef(INFO).
+-define(INFO(Format), error_logger:info_msg(Format)).
+-define(INFO(Format, Args), error_logger:info_msg(Format, Args)).
+-endif.
+
+-ifndef(ERROR).
+-define(ERROR(Format), error_logger:error_msg(Format)).
+-define(ERROR(Format, Args), error_logger:error_msg(Format, Args)).
+-endif.
 
 -endif.
